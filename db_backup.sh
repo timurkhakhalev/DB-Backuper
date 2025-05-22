@@ -86,25 +86,16 @@ action_backup() {
     
     local prefix_segment=""
     if [[ -n "$backup_prefix_arg" ]]; then
-        local sanitized_prefix
-        # 1. Replace common separators (space, dot, slash, etc.) with underscore. And collapse multiple resulting underscores.
-        sanitized_prefix=$(echo "$backup_prefix_arg" | tr ' ./[:space:]' '_' | tr -s '_')
-        # 2. Remove any characters not suitable for filenames (keep alphanumeric, underscore, hyphen)
-        sanitized_prefix=$(echo "$sanitized_prefix" | sed 's/[^a-zA-Z0-9_-]//g')
-        # 3. Remove leading/trailing underscores/hyphens
-        sanitized_prefix=$(echo "$sanitized_prefix" | sed -e 's/^[_+-]*//' -e 's/[_+-]*$//')
-        
-        # 4. If after all this, it's not empty and contains at least one alphanumeric char, use it.
-        if [[ -n "$sanitized_prefix" && "$sanitized_prefix" =~ [a-zA-Z0-9] ]]; then
-            prefix_segment="${sanitized_prefix}_" # Append underscore separator
-        else
-            log_info "Warning: Provided prefix '$backup_prefix_arg' resulted in an empty or invalid string after sanitization. No prefix will be used."
-            prefix_segment=""
+        # Use the prefix as-is without sanitization since it's for S3 directory path
+        prefix_segment="${backup_prefix_arg}"
+        # Add trailing slash if not present, to make it work as a directory
+        if [[ ! "$prefix_segment" =~ /$ ]]; then
+            prefix_segment="${prefix_segment}/"
         fi
     fi
 
-    local dump_filename="dump_${prefix_segment}${DB_NAME}_${timestamp}.sql"
-    local archive_filename="${prefix_segment}${DB_NAME}_${timestamp}.tar.gz"
+    local dump_filename="dump_${DB_NAME}_${timestamp}.sql"
+    local archive_filename="${DB_NAME}_${timestamp}.tar.gz"
     
     local temp_dir
     temp_dir=$(mktemp -d)
@@ -132,7 +123,7 @@ action_backup() {
     tar -czf "$local_archive_path" -C "$temp_dir" "$dump_filename"
     log_info "Archive created: $local_archive_path"
 
-    local s3_key="${S3_BACKUP_PATH}${archive_filename}"
+    local s3_key="${S3_BACKUP_PATH}${prefix_segment}${archive_filename}"
     local s3_full_url="s3://${S3_BUCKET_NAME}/${s3_key}"
 
     log_info "Uploading archive to S3: $s3_full_url"
@@ -143,17 +134,169 @@ action_backup() {
     fi
 
     log_info "Backup successful! Archive uploaded to $s3_full_url"
-    log_info "You can restore using: $0 restore $s3_full_url"
+    log_info "You can restore using: $0 download $s3_full_url and then $0 restore path/to/downloaded/dump.sql"
     rm -rf -- "$temp_dir" # Explicit cleanup, trap will also run
     trap - EXIT # Clear trap
 }
 
-# Action: Download from S3, decompress, and restore to database
+# Action: Download from S3 and decompress
+action_download() {
+    local s3_url="$1"
+    local output_dir="${2:-$(pwd)}"
+    
+    # Validate S3 URL format
+    if [[ ! "$s3_url" =~ ^s3:// ]]; then
+        log_error "Invalid S3 URL format. Expected: s3://bucket-name/path/to/archive.tar.gz"
+        exit 1
+    fi
+
+    log_info "Starting database backup download from $s3_url..."
+    
+    local archive_filename
+    archive_filename=$(basename "$s3_url")
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    trap 'rm -rf -- "$temp_dir"' EXIT # Cleanup temp dir on exit
+
+    local local_archive_path="${temp_dir}/${archive_filename}"
+
+    log_info "Downloading archive from S3: $s3_url"
+    aws s3 cp "$s3_url" "$local_archive_path" --profile "$AWS_PROFILE"
+    if [[ $? -ne 0 || ! -s "$local_archive_path" ]]; then
+        log_error "S3 download failed or downloaded file is empty."
+        exit 1
+    fi
+    log_info "Archive downloaded: $local_archive_path"
+
+    log_info "Decompressing archive to $output_dir..."
+    # Extract and find the .sql file
+    tar -xzf "$local_archive_path" -C "$output_dir"
+    
+    # Robustly find the SQL file
+    local extracted_dump_path
+    extracted_dump_path=$(find "$output_dir" -maxdepth 1 -type f -name "dump_*.sql" -print -quit)
+
+    if [[ -z "$extracted_dump_path" || ! -s "$extracted_dump_path" ]]; then
+        log_error "Failed to extract SQL dump file from archive or extracted file is empty."
+        log_error "Searched for files matching 'dump_*.sql' in the output directory."
+        ls -la "$output_dir" # List contents for debugging
+        exit 1
+    fi
+    log_info "SQL dump extracted: $extracted_dump_path"
+    log_info "Download and extraction successful!"
+    log_info "You can now restore using: $0 restore $extracted_dump_path"
+    
+    trap - EXIT # Clear trap
+}
+
+# Action: Restore database from SQL dump
 action_restore() {
+    local dump_path="$1"
+    local purge_option="$2"
+    
+    if [[ ! -f "$dump_path" ]]; then
+        log_error "SQL dump file not found at $dump_path"
+        exit 1
+    fi
+    
+    log_info "Starting database restore from $dump_path..."
+    parse_postgres_uri "$POSTGRES_URI"
+
+    # Ask user about purging the database if not specified
+    local should_purge=false
+    if [[ "$purge_option" == "--purge" ]]; then
+        should_purge=true
+    elif [[ "$purge_option" != "--no-purge" ]]; then
+        read -p "Do you want to purge (drop and recreate) the current database before restoring? (y/N): " user_response
+        if [[ "${user_response,,}" == "y" || "${user_response,,}" == "yes" ]]; then
+            should_purge=true
+        fi
+    fi
+
+    log_info "Restoring database '$DB_NAME' in container '$DOCKER_CONTAINER_NAME'..."
+    
+    if [[ "$should_purge" == true ]]; then
+        log_info "Purging database '$DB_NAME' before restore..."
+        
+        # First terminate any existing connections to the database
+        docker exec -i \
+            -e PGPASSWORD="$DB_PASS" \
+            "$DOCKER_CONTAINER_NAME" \
+            psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "postgres" \
+                 --quiet -v ON_ERROR_STOP=off \
+                 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME';"
+                 
+        # Drop the database - run with autocommit mode (using separate command execution)
+        # Create a temporary SQL file for dropping the database
+        local temp_sql_file=$(mktemp)
+        echo "DROP DATABASE IF EXISTS $DB_NAME;" > "$temp_sql_file"
+        
+        docker exec -i \
+            -e PGPASSWORD="$DB_PASS" \
+            "$DOCKER_CONTAINER_NAME" \
+            psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "postgres" \
+                 --quiet --no-psqlrc --no-align --tuples-only \
+                 -f - < "$temp_sql_file"
+        
+        local drop_status=$?
+        rm -f "$temp_sql_file"
+        
+        if [[ $drop_status -ne 0 ]]; then
+            log_error "Failed to drop database. This might be due to active connections."
+            exit 1
+        fi
+        
+        # Create the database using a temporary file
+        local temp_create_sql=$(mktemp)
+        echo "CREATE DATABASE $DB_NAME;" > "$temp_create_sql"
+        
+        docker exec -i \
+            -e PGPASSWORD="$DB_PASS" \
+            "$DOCKER_CONTAINER_NAME" \
+            psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "postgres" \
+                 --quiet --no-psqlrc --no-align --tuples-only \
+                 -f - < "$temp_create_sql"
+        
+        local create_status=$?
+        rm -f "$temp_create_sql"
+        
+        if [[ $create_status -ne 0 ]]; then
+            log_error "Failed to create database."
+            exit 1
+        fi
+        
+        log_info "Database purged successfully."
+    else
+        log_info "WARNING: This will merge data with existing tables. Conflicts may occur."
+    fi
+
+    # Restore the database without using a transaction
+    log_info "Starting database restore. This may take a while..."
+    docker exec -i \
+        -e PGPASSWORD="$DB_PASS" \
+        "$DOCKER_CONTAINER_NAME" \
+        psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" \
+             --quiet --set ON_ERROR_STOP=1 \
+        < "$dump_path"
+
+    local restore_status=$?
+    if [[ $restore_status -ne 0 ]]; then
+        log_error "Database restore failed."
+        exit 1
+    fi
+
+    log_info "Database restore successful!"
+}
+
+# Legacy restore action (kept for backward compatibility)
+action_restore_legacy() {
     local s3_url="$1"
     # s3_url is already validated by main before calling this.
 
+    log_info "DEPRECATED: This restore method will be removed in future versions."
+    log_info "Please use 'download' followed by 'restore' instead."
     log_info "Starting database restore from $s3_url..."
+    
     parse_postgres_uri "$POSTGRES_URI"
 
     local archive_filename
@@ -214,13 +357,24 @@ usage() {
     echo ""
     echo "Actions:"
     echo "  backup [--prefix <string>]  Dump PostgreSQL DB, compress, and upload to S3."
-    echo "                              --prefix: Optional string to prepend to the backup filename."
-    echo "                                        e.g., 'myproject' results in 'backup_myproject_dbname_timestamp.tar.gz'"
-    echo "  restore <s3_url>          Download archive from S3, decompress, and restore to PostgreSQL DB."
-    echo "                              <s3_url> is the full S3 path, e.g., s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}backup_prefix_dbname_timestamp.tar.gz"
-    echo "  help                      Show this help message."
+    echo "                              --prefix: Optional path prefix for S3 storage location."
+    echo "                                        e.g., 'folder1/folder2/' results in storing at 'S3_BACKUP_PATH/folder1/folder2/dbname_timestamp.tar.gz'"
+    echo "  download <s3_url> [dir]     Download archive from S3 and extract to current directory or specified directory."
+    echo "                              <s3_url> is the full S3 path, e.g., s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}dbname_timestamp.tar.gz"
+    echo "                              [dir] is an optional output directory (defaults to current directory)"
+    echo "  restore <dump_path> [--purge|--no-purge]"
+    echo "                              Restore from a SQL dump file. Optional flags to control database purging:"
+    echo "                              --purge: Drop and recreate the database before restoring"
+    echo "                              --no-purge: Preserve existing database (default, will ask if neither specified)"
+    echo "  restore-legacy <s3_url>     (DEPRECATED) Download archive from S3, decompress, and restore to PostgreSQL DB in one step."
+    echo "                              <s3_url> is the full S3 path, e.g., s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}dbname_timestamp.tar.gz"
+    echo "  help                        Show this help message."
     echo ""
     echo "Configuration is read from: $CONFIG_FILE"
+    echo ""
+    echo "Example workflow:"
+    echo "  1. $0 download s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}dbname_timestamp.tar.gz"
+    echo "  2. $0 restore ./dump_dbname_timestamp.sql --purge"
 }
 
 main() {
@@ -265,14 +419,39 @@ main() {
             done
             action_backup "$backup_filename_prefix_arg"
             ;;
-        restore)
+        download)
             if [[ $# -eq 0 ]]; then
-                log_error "ERROR: S3 URL must be provided for restore."
+                log_error "ERROR: S3 URL must be provided for download."
                 usage
                 exit 1
             fi
-            if [[ $# -gt 1 ]]; then # Check if more than one argument (the S3 URL) is provided
-                log_error "ERROR: Too many arguments for restore. Expected S3 URL only. Got: $*"
+            local s3_url_for_download="$1"
+            local output_dir="${2:-$(pwd)}"
+            # Validate S3 URL format
+            if [[ ! "$s3_url_for_download" =~ ^s3:// ]]; then
+                log_error "Invalid S3 URL format for download. Expected: s3://bucket-name/path/to/archive.tar.gz"
+                exit 1
+            fi
+            action_download "$s3_url_for_download" "$output_dir"
+            ;;
+        restore)
+            if [[ $# -eq 0 ]]; then
+                log_error "ERROR: SQL dump file path must be provided for restore."
+                usage
+                exit 1
+            fi
+            local dump_path="$1"
+            local purge_option="${2:-}"
+            action_restore "$dump_path" "$purge_option"
+            ;;
+        restore-legacy)
+            if [[ $# -eq 0 ]]; then
+                log_error "ERROR: S3 URL must be provided for restore-legacy."
+                usage
+                exit 1
+            fi
+            if [[ $# -gt 1 ]]; then
+                log_error "ERROR: Too many arguments for restore-legacy. Expected S3 URL only. Got: $*"
                 usage
                 exit 1
             fi
@@ -282,7 +461,7 @@ main() {
                 log_error "Invalid S3 URL format for restore. Expected: s3://bucket-name/path/to/archive.tar.gz"
                 exit 1
             fi
-            action_restore "$s3_url_for_restore"
+            action_restore_legacy "$s3_url_for_restore"
             ;;
         help|--help|-h)
             usage
