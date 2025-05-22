@@ -1,0 +1,31 @@
+# Configuration for the PostgreSQL Backup Tool
+
+# --- AWS Configuration ---
+# AWS CLI Profile name to use (must be configured in ~/.aws/config or ~/.aws/credentials)
+# e.g., my-s3-user
+AWS_PROFILE="default"
+
+# AWS S3 Bucket name where backups will be stored
+# e.g., my-postgres-backups
+S3_BUCKET_NAME="your-s3-bucket-name"
+
+# Optional: S3 path prefix within the bucket (e.g., "backups/production/")
+# Leave empty or comment out if you want to store at the bucket root.
+# Ensure it ends with a slash if specified.
+S3_BACKUP_PATH="postgres_dumps/"
+
+
+# --- PostgreSQL Configuration ---
+# PostgreSQL connection URI
+# Format: postgresql://username:password@host:port/database_name
+# Example: postgresql://myuser:mypassword@localhost:5432/mydb
+# If running pg_dump/psql against a DB in another Docker container from the host,
+# 'host' might be 'localhost' if the port is mapped, or the container's IP/hostname on the Docker network.
+# If running pg_dump/psql *inside* the DB container (which this script does), 'host' is typically 'localhost'
+# or the service name if using Docker Compose.
+POSTGRES_URI="postgresql://user:password@localhost:5432/dbname"
+
+# Name or ID of the running PostgreSQL Docker container
+# This is the container where pg_dump and psql commands will be executed.
+# e.g., my_postgres_container
+DOCKER_CONTAINER_NAME="your_postgres_container_name"
