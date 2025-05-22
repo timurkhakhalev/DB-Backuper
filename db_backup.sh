@@ -3,7 +3,7 @@ set -eo pipefail # Exit on error, treat unset variables as an error, and propaga
 
 # --- Configuration Loading ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/db_backup.conf"
+CONFIG_FILE="${SCRIPT_DIR}/backup.conf"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "ERROR: Configuration file not found at $CONFIG_FILE"

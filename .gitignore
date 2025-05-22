@@ -1,0 +1,9 @@
+*.conf
+*.log
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.lzma
+*.tar.lz
+
+logs/*
