@@ -52,6 +52,7 @@ install_system_wide() {
     sudo cp "${SCRIPT_DIR}/db-backupper" "${INSTALL_DIR}/db-backupper"
     sudo sed -i "s|^SCRIPT_DIR=.*|SCRIPT_DIR=\"$LIB_DIR\"|" "${INSTALL_DIR}/db-backupper"
     sudo sed -i 's|${SCRIPT_DIR}/lib/|${SCRIPT_DIR}/|g' "${INSTALL_DIR}/db-backupper"
+    sudo sed -i '/^CONFIG_DIR=.*get_script_dir/d' "${INSTALL_DIR}/db-backupper"
     sudo chmod +x "${INSTALL_DIR}/db-backupper"
     
     log_success "db-backupper installed to ${INSTALL_DIR}/db-backupper"
@@ -71,6 +72,7 @@ install_user_only() {
     cp "${SCRIPT_DIR}/db-backupper" "$USER_BIN_DIR/db-backupper"
     sed -i "s|^SCRIPT_DIR=.*|SCRIPT_DIR=\"$USER_LIB_DIR\"|" "$USER_BIN_DIR/db-backupper"
     sed -i 's|${SCRIPT_DIR}/lib/|${SCRIPT_DIR}/|g' "$USER_BIN_DIR/db-backupper"
+    sed -i '/^CONFIG_DIR=.*get_script_dir/d' "$USER_BIN_DIR/db-backupper"
     chmod +x "$USER_BIN_DIR/db-backupper"
     
     log_success "db-backupper installed to $USER_BIN_DIR/db-backupper"
