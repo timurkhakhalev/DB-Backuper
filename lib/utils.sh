@@ -51,21 +51,25 @@ check_all_commands() {
 
 # Find the script directory (works even when installed globally)
 get_script_dir() {
-    log_info "DEBUG: get_script_dir called from ${BASH_SOURCE[1]}"
+    set +eo pipefail  # Temporarily disable strict error handling
+    echo "DEBUG: get_script_dir called from ${BASH_SOURCE[1]}" >&2
     local source="${BASH_SOURCE[0]}"
-    log_info "DEBUG: initial source = $source"
+    echo "DEBUG: initial source = $source" >&2
     
     while [[ -h "$source" ]]; do # resolve $source until the file is no longer a symlink
-        local dir="$(cd -P "$(dirname "$source")" && pwd)"
-        source="$(readlink "$source")"
+        echo "DEBUG: source is a symlink: $source" >&2
+        local dir="$(cd -P "$(dirname "$source")" && pwd 2>&1)"
+        echo "DEBUG: resolved dir from symlink: $dir" >&2
+        source="$(readlink "$source" 2>&1)"
+        echo "DEBUG: readlink result: $source" >&2
         [[ $source != /* ]] && source="$dir/$source" # if $source was a relative symlink, we need to resolve it relative to the path where the symlink file was located
     done
-    local dir="$(cd -P "$(dirname "$source")" && pwd)"
-    log_info "DEBUG: resolved dir = $dir"
+    local dir="$(cd -P "$(dirname "$source")" && pwd 2>&1)"
+    echo "DEBUG: final resolved dir = $dir" >&2
     
     # If we're installed globally, look for config in common locations
     if [[ "$dir" == "/usr/local/bin" ]] || [[ "$dir" == "/usr/bin" ]]; then
-        log_info "DEBUG: detected global installation"
+        echo "DEBUG: detected global installation" >&2
         # Look for config in current directory first, then user's home
         if [[ -f "./backup.conf" ]]; then
             echo "$(pwd)"
@@ -77,10 +81,11 @@ get_script_dir() {
             echo "$(pwd)"
         fi
     else
-        log_info "DEBUG: detected source directory installation"
+        echo "DEBUG: detected source directory installation" >&2
         # We're running from the source directory
         echo "$dir/.."
     fi
+    set -eo pipefail  # Re-enable strict error handling
 }
 
 # Check available disk space (in bytes)
