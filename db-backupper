@@ -42,6 +42,7 @@ usage() {
     echo "                              --no-purge: Preserve existing database (default, will ask if neither specified)"
     echo "  restore-legacy <s3_url>     (DEPRECATED) Download archive from S3, decompress, and restore to PostgreSQL DB in one step."
     echo "                              <s3_url> is the full S3 path, e.g., s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}dbname_timestamp.tar.gz"
+    echo "  crontab                     Generate example crontab entries for automated backups."
     echo "  help                        Show this help message."
     echo ""
     echo "Configuration is read from: ${CONFIG_DIR}/backup.conf"
@@ -131,6 +132,9 @@ main() {
                 exit 1
             fi
             action_restore_legacy "$s3_url_for_restore"
+            ;;
+        crontab)
+            action_crontab
             ;;
         help|--help|-h)
             usage
