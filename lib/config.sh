@@ -45,11 +45,29 @@ load_config_secure() {
 # Load configuration from backup.conf
 load_config() {
     local script_dir="$1"
-    local config_file="${script_dir}/backup.conf"
+    local config_file=""
     
-    if [[ ! -f "$config_file" ]]; then
-        log_error "Configuration file not found at $config_file"
-        log_error "Please copy backup.conf.example to backup.conf and fill in your details."
+    # Check configuration locations in order of precedence
+    local config_locations=(
+        "./backup.conf"                                    # Current directory
+        "${HOME}/.config/db-backupper/backup.conf"        # User config
+        "/etc/db-backupper/backup.conf"                   # System config
+    )
+    
+    for location in "${config_locations[@]}"; do
+        if [[ -f "$location" ]]; then
+            config_file="$location"
+            log_info "Using configuration file: $config_file"
+            break
+        fi
+    done
+    
+    if [[ -z "$config_file" ]]; then
+        log_error "Configuration file not found in any of these locations:"
+        for location in "${config_locations[@]}"; do
+            log_error "  - $location"
+        done
+        log_error "Please copy backup.conf.example to one of these locations and fill in your details."
         exit 1
     fi
     
