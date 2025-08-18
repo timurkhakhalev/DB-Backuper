@@ -28,7 +28,7 @@ A professional, modular tool that automates PostgreSQL database backup and resto
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository_url> db-backupper
+   git clone https://github.com/timurkhakhalev/db-backupper db-backupper
    cd db-backupper
    ```
 
