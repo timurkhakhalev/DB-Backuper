@@ -23,7 +23,7 @@ source "${SCRIPT_DIR}/lib/backup.sh"
 source "${SCRIPT_DIR}/lib/restore.sh"
 
 # Load configuration
-load_config "$CONFIG_DIR"
+load_config
 
 # Usage information
 usage() {

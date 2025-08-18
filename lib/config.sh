@@ -50,7 +50,6 @@ load_config_secure() {
 
 # Load configuration from backup.conf
 load_config() {
-    local script_dir="$1"
     local config_file=""
     
     # Check configuration locations in order of precedence
