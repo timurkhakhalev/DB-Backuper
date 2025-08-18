@@ -51,16 +51,21 @@ check_all_commands() {
 
 # Find the script directory (works even when installed globally)
 get_script_dir() {
+    log_info "DEBUG: get_script_dir called from ${BASH_SOURCE[1]}"
     local source="${BASH_SOURCE[0]}"
+    log_info "DEBUG: initial source = $source"
+    
     while [[ -h "$source" ]]; do # resolve $source until the file is no longer a symlink
         local dir="$(cd -P "$(dirname "$source")" && pwd)"
         source="$(readlink "$source")"
         [[ $source != /* ]] && source="$dir/$source" # if $source was a relative symlink, we need to resolve it relative to the path where the symlink file was located
     done
     local dir="$(cd -P "$(dirname "$source")" && pwd)"
+    log_info "DEBUG: resolved dir = $dir"
     
     # If we're installed globally, look for config in common locations
     if [[ "$dir" == "/usr/local/bin" ]] || [[ "$dir" == "/usr/bin" ]]; then
+        log_info "DEBUG: detected global installation"
         # Look for config in current directory first, then user's home
         if [[ -f "./backup.conf" ]]; then
             echo "$(pwd)"
@@ -72,6 +77,7 @@ get_script_dir() {
             echo "$(pwd)"
         fi
     else
+        log_info "DEBUG: detected source directory installation"
         # We're running from the source directory
         echo "$dir/.."
     fi
