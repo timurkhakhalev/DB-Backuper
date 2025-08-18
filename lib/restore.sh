@@ -1,6 +1,55 @@
 #!/usr/bin/env bash
 # Restore functionality for db-backupper
 
+# Securely extract tar archive with path traversal protection
+secure_tar_extract() {
+    local archive_path="$1"
+    local extract_dir="$2"
+    
+    # Validate archive exists and is readable
+    if [[ ! -f "$archive_path" || ! -r "$archive_path" ]]; then
+        log_error "Archive not found or not readable: $archive_path"
+        return 1
+    fi
+    
+    # Check if it's a valid tar.gz file
+    if ! tar -tzf "$archive_path" >/dev/null 2>&1; then
+        log_error "Invalid or corrupted archive: $archive_path"
+        return 1
+    fi
+    
+    # List contents and validate paths
+    local file_list
+    file_list=$(tar -tzf "$archive_path")
+    
+    while IFS= read -r file_path; do
+        # Check for path traversal attempts
+        if [[ "$file_path" =~ \.\./|/\.\./ ]] || [[ "$file_path" =~ ^/ ]]; then
+            log_error "Security violation: path traversal detected in archive: $file_path"
+            return 1
+        fi
+        
+        # Check for device files or symlinks (basic check)
+        if [[ "$file_path" =~ ^/dev/|^/proc/|^/sys/ ]]; then
+            log_error "Security violation: system path in archive: $file_path"
+            return 1
+        fi
+        
+        # Limit path depth to prevent zip bomb-like attacks
+        local depth
+        depth=$(echo "$file_path" | tr '/' '\n' | wc -l)
+        if [[ $depth -gt 10 ]]; then
+            log_error "Security violation: path too deep in archive: $file_path"
+            return 1
+        fi
+    done <<< "$file_list"
+    
+    # Extract with additional security measures
+    tar -xzf "$archive_path" -C "$extract_dir" --no-same-owner --no-same-permissions
+    
+    return $?
+}
+
 # Action: Download from S3 and decompress
 action_download() {
     local s3_url="$1"
@@ -31,8 +80,11 @@ action_download() {
     log_info "Archive downloaded: $local_archive_path"
 
     log_info "Decompressing archive to $output_dir..."
-    # Extract and find the .sql file
-    tar -xzf "$local_archive_path" -C "$output_dir"
+    # Extract and find the .sql file using secure extraction
+    if ! secure_tar_extract "$local_archive_path" "$output_dir"; then
+        log_error "Failed to extract archive securely"
+        exit 1
+    fi
     
     # Robustly find the SQL file
     local extracted_dump_path
@@ -121,9 +173,11 @@ action_restore_legacy() {
     log_info "Archive downloaded: $local_archive_path"
 
     log_info "Decompressing archive..."
-    # Extract and find the .sql file (assuming only one .sql file in the root of the tar)
-    # And that its name starts with "dump_" and ends with ".sql"
-    tar -xzf "$local_archive_path" -C "$temp_dir"
+    # Extract and find the .sql file using secure extraction
+    if ! secure_tar_extract "$local_archive_path" "$temp_dir"; then
+        log_error "Failed to extract archive securely"
+        exit 1
+    fi
     # Robustly find the SQL file, assuming it's the only .sql file starting with dump_ in the temp_dir root
     extracted_dump_path=$(find "$temp_dir" -maxdepth 1 -type f -name "dump_*.sql" -print -quit)
 
@@ -135,14 +189,15 @@ action_restore_legacy() {
     fi
     log_info "SQL dump extracted: $extracted_dump_path"
 
+    # Validate container name
+    if ! validate_container_name "$DOCKER_CONTAINER_NAME"; then
+        log_error "Invalid container name: $DOCKER_CONTAINER_NAME"
+        exit 1
+    fi
+    
     log_info "Restoring database '$DB_NAME' in container '$DOCKER_CONTAINER_NAME'..."
     log_info "WARNING: This will typically overwrite existing data in tables defined in the dump."
-    docker exec -i \
-        -e PGPASSWORD="$DB_PASS" \
-        "$DOCKER_CONTAINER_NAME" \
-        psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" \
-             --quiet --single-transaction --set ON_ERROR_STOP=1 \
-        < "$extracted_dump_path"
+    execute_psql_secure -d "$DB_NAME" --quiet --single-transaction --set ON_ERROR_STOP=1 < "$extracted_dump_path"
 
     if [[ $? -ne 0 ]]; then
         log_error "Database restore failed."

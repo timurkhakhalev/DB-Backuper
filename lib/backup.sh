@@ -1,6 +1,35 @@
 #!/usr/bin/env bash
 # Backup functionality for db-backupper
 
+# Sanitize S3 prefix path to prevent path traversal
+sanitize_s3_prefix() {
+    local prefix="$1"
+    
+    # Remove any path traversal attempts
+    prefix="${prefix//..\/}"
+    prefix="${prefix//\.\.\\}"
+    
+    # Remove leading slashes to prevent absolute paths
+    prefix="${prefix#/}"
+    
+    # Remove any null bytes or control characters
+    prefix="${prefix//[$'\x00'-$'\x1f\x7f']}"
+    
+    # Ensure it doesn't start with special AWS S3 prefixes
+    if [[ "$prefix" =~ ^\.aws/ ]] || [[ "$prefix" =~ ^aws/ ]]; then
+        log_error "Invalid prefix: cannot start with aws/ or .aws/"
+        return 1
+    fi
+    
+    # Validate characters - allow alphanumeric, hyphen, underscore, slash, period
+    if [[ ! "$prefix" =~ ^[a-zA-Z0-9._/-]*$ ]]; then
+        log_error "Invalid characters in prefix: $prefix"
+        return 1
+    fi
+    
+    echo "$prefix"
+}
+
 # Action: Backup database, compress, and upload to S3
 action_backup() {
     local backup_prefix_arg="$1" # Optional prefix from command line
@@ -12,10 +41,14 @@ action_backup() {
     
     local prefix_segment=""
     if [[ -n "$backup_prefix_arg" ]]; then
-        # Use the prefix as-is without sanitization since it's for S3 directory path
-        prefix_segment="${backup_prefix_arg}"
+        # Sanitize the prefix to prevent path traversal
+        prefix_segment=$(sanitize_s3_prefix "$backup_prefix_arg")
+        if [[ $? -ne 0 ]]; then
+            log_error "Invalid backup prefix provided"
+            exit 1
+        fi
         # Add trailing slash if not present, to make it work as a directory
-        if [[ ! "$prefix_segment" =~ /$ ]]; then
+        if [[ -n "$prefix_segment" && ! "$prefix_segment" =~ /$ ]]; then
             prefix_segment="${prefix_segment}/"
         fi
     fi

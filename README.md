@@ -230,28 +230,25 @@ db-backupper restore-legacy s3://your-bucket/postgres_dumps/test/mydb_20241201_1
 
 ## Architecture
 
-The tool is organized into clean, maintainable modules:
+The tool uses a modular architecture with separate modules for configuration, database operations, backup, and restore functionality. For detailed architecture documentation, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-```
-db-backupper/
-├── db-backupper          # Main executable
-├── install.sh            # Installation script
-├── backup.conf.example   # Configuration template
-├── lib/                  # Library modules
-│   ├── config.sh        # Configuration loading & validation
-│   ├── database.sh      # Database operations
-│   ├── backup.sh        # Backup functionality
-│   ├── restore.sh       # Restore functionality
-│   └── utils.sh         # Utility functions & logging
-└── README.md
-```
+## Security Features
 
-## Security Considerations
+This tool implements comprehensive security hardening:
 
-- **Configuration File**: The `backup.conf` file contains database credentials. Installation automatically sets secure permissions (`chmod 600`)
-- **Environment Variables**: Database passwords are passed as environment variables to Docker containers. For production environments, consider using Docker secrets or `.pgpass` files
-- **AWS Credentials**: Use IAM roles when possible instead of access keys. Limit S3 permissions to specific buckets and operations
-- **Network Security**: Ensure proper network segmentation between backup systems and production databases
+- **Input Validation**: All user inputs are validated to prevent injection attacks
+- **Secure Authentication**: Uses `.pgpass` files instead of exposing passwords in process lists
+- **Path Security**: Prevents path traversal attacks in S3 prefixes and archive extraction
+- **Configuration Security**: Secure configuration parsing prevents code injection
+- **Resource Protection**: Monitors disk space and memory usage to prevent resource exhaustion
+
+**Security Best Practices**:
+- Configuration files are automatically set to secure permissions (`chmod 600`)
+- Use IAM roles when possible instead of access keys
+- Limit S3 permissions to specific buckets and required operations
+- Ensure proper network segmentation between backup systems and production databases
+
+For security testing and detailed security architecture, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Troubleshooting
 
@@ -293,13 +290,7 @@ db-backupper backup --help
 
 ## Contributing
 
-This tool uses a modular architecture to make contributions easier:
-
-1. **Configuration changes**: Edit `lib/config.sh`
-2. **Database operations**: Modify `lib/database.sh`
-3. **Backup logic**: Update `lib/backup.sh`
-4. **Restore functionality**: Change `lib/restore.sh`
-5. **Utilities/logging**: Enhance `lib/utils.sh`
+For development setup, testing procedures, and contribution guidelines, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 
