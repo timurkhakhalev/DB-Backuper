@@ -35,57 +35,23 @@ validate_container_name() {
     return 0
 }
 
-# Setup secure .pgpass file for authentication
-setup_pgpass() {
-    local temp_pgpass
-    temp_pgpass=$(mktemp)
-    chmod 600 "$temp_pgpass"
-    
-    # Create .pgpass entry: hostname:port:database:username:password
-    echo "$DB_HOST:$DB_PORT:*:$DB_USER:$DB_PASS" > "$temp_pgpass"
-    
-    # Return the temp file path
-    echo "$temp_pgpass"
-}
 
-# Execute psql command securely without exposing password
+# Execute psql command using connection URI
 execute_psql_secure() {
-    local pgpass_file
-    pgpass_file=$(setup_pgpass)
-    
-    # Use .pgpass file instead of PGPASSWORD
     docker exec -i \
-        -e PGPASSFILE="/.pgpass" \
-        -v "$pgpass_file:/.pgpass:ro" \
         "$DOCKER_CONTAINER_NAME" \
-        psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" "$@"
+        psql "$POSTGRES_URI" "$@"
     
-    local exit_code=$?
-    
-    # Cleanup
-    rm -f "$pgpass_file"
-    
-    return $exit_code
+    return $?
 }
 
-# Execute pg_dump securely without exposing password
+# Execute pg_dump using connection URI
 execute_pgdump_secure() {
-    local pgpass_file
-    pgpass_file=$(setup_pgpass)
-    
-    # Use .pgpass file instead of PGPASSWORD
     docker exec -i \
-        -e PGPASSFILE="/.pgpass" \
-        -v "$pgpass_file:/.pgpass:ro" \
         "$DOCKER_CONTAINER_NAME" \
-        pg_dump -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" "$@"
+        pg_dump "$POSTGRES_URI" "$@"
     
-    local exit_code=$?
-    
-    # Cleanup
-    rm -f "$pgpass_file"
-    
-    return $exit_code
+    return $?
 }
 
 # Parse PostgreSQL URI
@@ -136,7 +102,7 @@ execute_dump() {
     
     log_info "Dumping database '$DB_NAME' from container '$DOCKER_CONTAINER_NAME'..."
     
-    execute_pgdump_secure -d "$DB_NAME" --no-owner --no-privileges -F p > "$dump_path"
+    execute_pgdump_secure --no-owner --no-privileges -F p > "$dump_path"
     
     if [[ $? -ne 0 || ! -s "$dump_path" ]]; then
         log_error "Database dump failed or dump file is empty."
@@ -156,37 +122,32 @@ purge_database() {
         return 1
     fi
     
+    # Create postgres connection URI by replacing database name
+    local postgres_uri="${POSTGRES_URI%/*}/postgres"
+    
     # First terminate any existing connections to the database
     local quoted_db_name
     quoted_db_name=$(quote_identifier "$DB_NAME")
-    execute_psql_secure -d "postgres" --quiet -v ON_ERROR_STOP=off \
+    
+    docker exec -i "$DOCKER_CONTAINER_NAME" \
+        psql "$postgres_uri" --quiet -v ON_ERROR_STOP=off \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $quoted_db_name;"
              
-    # Drop the database - run with autocommit mode (using separate command execution)
+    # Drop and create the database
     local temp_sql_file=$(mktemp)
-    echo "DROP DATABASE IF EXISTS $quoted_db_name;" > "$temp_sql_file"
+    cat > "$temp_sql_file" << EOF
+DROP DATABASE IF EXISTS $quoted_db_name;
+CREATE DATABASE $quoted_db_name;
+EOF
     
-    execute_psql_secure -d "postgres" --quiet --no-psqlrc --no-align --tuples-only -f - < "$temp_sql_file"
+    docker exec -i "$DOCKER_CONTAINER_NAME" \
+        psql "$postgres_uri" --quiet --no-psqlrc --no-align --tuples-only < "$temp_sql_file"
     
-    local drop_status=$?
+    local status=$?
     rm -f "$temp_sql_file"
     
-    if [[ $drop_status -ne 0 ]]; then
-        log_error "Failed to drop database. This might be due to active connections."
-        return 1
-    fi
-    
-    # Create the database using a temporary file
-    local temp_create_sql=$(mktemp)
-    echo "CREATE DATABASE $quoted_db_name;" > "$temp_create_sql"
-    
-    execute_psql_secure -d "postgres" --quiet --no-psqlrc --no-align --tuples-only -f - < "$temp_create_sql"
-    
-    local create_status=$?
-    rm -f "$temp_create_sql"
-    
-    if [[ $create_status -ne 0 ]]; then
-        log_error "Failed to create database."
+    if [[ $status -ne 0 ]]; then
+        log_error "Failed to drop/create database."
         return 1
     fi
     
@@ -206,7 +167,8 @@ execute_restore() {
     
     log_info "Starting database restore. This may take a while..."
     
-    execute_psql_secure -d "$DB_NAME" --quiet --set ON_ERROR_STOP=1 < "$dump_path"
+    docker exec -i "$DOCKER_CONTAINER_NAME" \
+        psql "$POSTGRES_URI" --quiet --set ON_ERROR_STOP=1 < "$dump_path"
     
     return $?
 }
