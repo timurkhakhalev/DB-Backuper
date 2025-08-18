@@ -1,118 +1,321 @@
-# PostgreSQL Docker Backup & Restore Tool for S3
+# db-backupper - PostgreSQL Docker Backup & Restore Tool for S3
 
-This Bash tool automates the process of:
-1.  Dumping a PostgreSQL database running in a Docker container.
-2.  Compressing the dump into a `.tar.gz` archive.
-3.  Uploading the archive to an AWS S3 bucket.
-4.  Downloading an archive from S3.
-5.  Decompressing the archive and restoring the dump to a PostgreSQL database in Docker.
+A professional, modular tool that automates PostgreSQL database backup and restore operations with Amazon S3 storage. Features a clean architecture with separate modules for maintainability and easy deployment.
+
+## Features
+
+- **Modular Architecture**: Clean separation of concerns with dedicated modules for configuration, database operations, backup, and restore functionality
+- **Global Command**: Install as `db-backupper` command available system-wide or per-user
+- **Cron-Ready**: Enhanced PATH handling and logging for reliable automated backups
+- **Flexible Configuration**: Multiple configuration file locations for different deployment scenarios
+- **Comprehensive Error Handling**: Robust error checking and informative logging
+- **Legacy Compatibility**: Maintains all existing functionality while improving structure
 
 ## Prerequisites
 
-1.  **Bash:** The script is written for Bash.
-2.  **AWS CLI:** Installed and configured. The script uses an AWS profile for authentication.
-    *   Install: `https://aws.amazon.com/cli/`
-    *   Configure: Run `aws configure --profile <your-profile-name>` (e.g., `aws configure --profile s3-manager`) or ensure your default profile has S3 access, or the instance has an IAM role with S3 permissions.
-3.  **Docker:** Installed and running. The target PostgreSQL database must be running in a Docker container.
-    *   Install: `https://docs.docker.com/get-docker/`
-4.  **`tar` utility:** Usually pre-installed on Linux/macOS.
-5.  **PostgreSQL Client Tools (`pg_dump`, `psql`):** These must be available *inside* the specified PostgreSQL Docker container. Standard PostgreSQL images (e.g., `postgres:latest`) include these.
+1. **Bash**: The tool is written for Bash shell
+2. **AWS CLI**: Installed and configured with appropriate S3 permissions
+   - Install: https://aws.amazon.com/cli/
+   - Configure: See AWS Setup section below
+3. **Docker**: Installed and running with PostgreSQL container
+   - Install: https://docs.docker.com/get-docker/
+4. **tar utility**: Usually pre-installed on Linux/macOS
+5. **PostgreSQL Client Tools**: Must be available inside the PostgreSQL Docker container (standard PostgreSQL images include these)
 
-## Installation
+## Quick Start
 
-1.  **Clone or Download:**
-    Get the files into a directory on your system, for example, `db_backup_tool/`.
-    ```bash
-    git clone <repository_url> db_backup_tool
-    cd db_backup_tool
-    ```
-    Or, manually create the directory and files as provided.
+### Installation
 
-2.  **Configure:**
-    Copy the example configuration file and edit it with your details:
-    ```bash
-    cp db_backup.conf.example db_backup.conf
-    nano db_backup.conf # or your favorite editor
-    ```
-    Fill in the following:
-    *   `AWS_PROFILE`: Your AWS CLI profile name.
-    *   `S3_BUCKET_NAME`: The S3 bucket for storing backups.
-    *   `S3_BACKUP_PATH` (Optional): A path prefix within the S3 bucket (e.g., `my_app/db_dumps/`). Remember the trailing slash if used.
-    *   `POSTGRES_URI`: Connection string for your PostgreSQL database (e.g., `postgresql://pguser:pgpass@localhost:5432/mydb`).
-        *   The `host` here is from the perspective of *inside* the Docker container where `pg_dump` and `psql` will run. If it's the same container, `localhost` is usually correct. If it's another container on the same Docker network, use its service name.
-    *   `DOCKER_CONTAINER_NAME`: The name or ID of your running PostgreSQL Docker container.
+1. **Clone the repository:**
+   ```bash
+   git clone <repository_url> db-backupper
+   cd db-backupper
+   ```
 
-3.  **Make Executable:**
-    Give the main script execution permissions:
-    ```bash
-    chmod +x db_backup.sh
-    ```
+2. **Install globally (recommended):**
+   ```bash
+   sudo ./install.sh
+   ```
+   
+   Or install for current user only:
+   ```bash
+   ./install.sh --user
+   ```
 
-## Usage
+3. **Configure:**
+   ```bash
+   # Edit the configuration file created during installation
+   sudo nano /etc/db-backupper/backup.conf  # system-wide
+   # OR
+   nano ~/.config/db-backupper/backup.conf  # user installation
+   ```
 
-### Create a Cronjob
+### Basic Usage
 
 ```bash
+# Create a backup
+db-backupper backup
+
+# Create a backup with prefix for organization
+db-backupper backup --prefix "production/"
+
+# Download a backup
+db-backupper download s3://your-bucket/path/to/backup.tar.gz
+
+# Restore a backup (with interactive purge option)
+db-backupper restore ./dump_dbname_20241201_120000.sql
+
+# Restore with automatic database purging
+db-backupper restore ./dump_dbname_20241201_120000.sql --purge
+```
+
+## Configuration
+
+### Configuration File Locations
+
+The tool looks for `backup.conf` in the following order:
+1. `./backup.conf` (current directory)
+2. `~/.config/db-backupper/backup.conf` (user config)
+3. `/etc/db-backupper/backup.conf` (system config)
+
+### Configuration Variables
+
+Edit your `backup.conf` file with the following settings:
+
+```bash
+# AWS Configuration
+AWS_PROFILE="your-aws-profile"           # AWS CLI profile name
+S3_BUCKET_NAME="your-s3-bucket-name"     # S3 bucket for backups
+S3_BACKUP_PATH="postgres_dumps/"         # Optional S3 path prefix
+
+# PostgreSQL Configuration  
+POSTGRES_URI="postgresql://user:password@localhost:5432/dbname"
+DOCKER_CONTAINER_NAME="your_postgres_container_name"
+```
+
+## AWS Setup
+
+### Setting Up AWS Profile on EC2/Server Instance
+
+#### Option 1: Using AWS CLI with Access Keys
+```bash
+# Install AWS CLI if not already installed
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+# Configure AWS profile
+aws configure --profile db-backupper
+# Enter your AWS Access Key ID, Secret Access Key, region, and output format
+```
+
+#### Option 2: Using IAM Role (Recommended for EC2)
+```bash
+# Attach IAM role to your EC2 instance with S3 permissions
+# No additional configuration needed - use "default" profile
+
+# Verify IAM role permissions
+aws sts get-caller-identity
+aws s3 ls s3://your-bucket-name --profile default
+```
+
+### Required IAM Permissions
+
+Your AWS user/role needs these S3 permissions:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::your-bucket-name",
+                "arn:aws:s3:::your-bucket-name/*"
+            ]
+        }
+    ]
+}
+```
+
+### Troubleshooting AWS Authentication
+
+1. **Check AWS CLI installation**: `aws --version`
+2. **List configured profiles**: `aws configure list-profiles`
+3. **Test S3 access**: `aws s3 ls --profile your-profile-name`
+4. **Check credentials file**: `cat ~/.aws/credentials`
+5. **For EC2 instances**: Verify IAM role is attached in EC2 console
+
+## Advanced Usage
+
+### Automated Backups with Cron
+
+Create automated backups using cron. The tool includes enhanced PATH handling for reliable cron execution:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add backup job (runs every 3 days at midnight)
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 0 */3 * * /home/ubuntu/backuper/db_backup.sh --prefix "weekly/" >> /home/ubuntu/backuper/logs/weekly.log 2>&1
+0 0 */3 * * db-backupper backup --prefix "scheduled/" >> /var/log/db-backupper.log 2>&1
+
+# For user installation, ensure PATH includes ~/.local/bin
+PATH=/home/username/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-Navigate to the `db_backup_tool` directory.
+### Command Reference
 
-### Create a Backup
+#### Backup Commands
+```bash
+# Basic backup
+db-backupper backup
 
-This will dump the database, compress it, and upload it to S3.
+# Backup with S3 path prefix
+db-backupper backup --prefix "production/"
+db-backupper backup --prefix "weekly/2024/"
+```
+
+#### Download Commands
+```bash
+# Download to current directory
+db-backupper download s3://bucket/path/to/backup.tar.gz
+
+# Download to specific directory
+db-backupper download s3://bucket/path/to/backup.tar.gz /path/to/downloads/
+```
+
+#### Restore Commands
+```bash
+# Interactive restore (asks about database purging)
+db-backupper restore /path/to/dump_file.sql
+
+# Force purge database before restore
+db-backupper restore /path/to/dump_file.sql --purge
+
+# Preserve existing database (merge mode)
+db-backupper restore /path/to/dump_file.sql --no-purge
+
+# Legacy restore (deprecated - downloads and restores in one step)
+db-backupper restore-legacy s3://bucket/path/to/backup.tar.gz
+```
+
+### Example Workflows
+
+#### Standard Backup and Restore Workflow
+```bash
+# 1. Create backup
+db-backupper backup --prefix "before-migration/"
+
+# 2. Later, download the backup
+db-backupper download s3://your-bucket/postgres_dumps/before-migration/mydb_20241201_120000.tar.gz
+
+# 3. Restore to database (with purge for clean restore)
+db-backupper restore ./dump_mydb_20241201_120000.sql --purge
+```
+
+#### Quick Testing Workflow
+```bash
+# Test backup
+db-backupper backup --prefix "test/"
+
+# Test restore (without purging - merges with existing data)
+db-backupper restore-legacy s3://your-bucket/postgres_dumps/test/mydb_20241201_120000.tar.gz
+```
+
+## Architecture
+
+The tool is organized into clean, maintainable modules:
+
+```
+db-backupper/
+├── db-backupper          # Main executable
+├── install.sh            # Installation script
+├── backup.conf.example   # Configuration template
+├── lib/                  # Library modules
+│   ├── config.sh        # Configuration loading & validation
+│   ├── database.sh      # Database operations
+│   ├── backup.sh        # Backup functionality
+│   ├── restore.sh       # Restore functionality
+│   └── utils.sh         # Utility functions & logging
+└── README.md
+```
+
+## Security Considerations
+
+- **Configuration File**: The `backup.conf` file contains database credentials. Installation automatically sets secure permissions (`chmod 600`)
+- **Environment Variables**: Database passwords are passed as environment variables to Docker containers. For production environments, consider using Docker secrets or `.pgpass` files
+- **AWS Credentials**: Use IAM roles when possible instead of access keys. Limit S3 permissions to specific buckets and operations
+- **Network Security**: Ensure proper network segmentation between backup systems and production databases
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Command not found" after installation**
+   - For user installation: Ensure `~/.local/bin` is in your PATH
+   - For system installation: Verify `/usr/local/bin` is in your PATH
+
+2. **AWS authentication errors**
+   - Verify AWS CLI installation: `aws --version`
+   - Test profile access: `aws s3 ls --profile your-profile-name`
+   - Check IAM permissions match requirements above
+
+3. **Docker connection issues**
+   - Verify container name: `docker ps`
+   - Check container is running: `docker inspect container-name`
+   - Ensure PostgreSQL tools are available in container
+
+4. **Database connection errors**
+   - Verify POSTGRES_URI format and credentials
+   - Test connection from within container
+   - Check network connectivity between containers
+
+5. **Backup/restore failures**
+   - Check S3 bucket permissions and existence
+   - Verify disk space for temporary files
+   - Review logs for specific error messages
+
+### Getting Help
 
 ```bash
-./db_backup.sh backup
-```
-On success, it will output the S3 URL of the created backup.
+# Show help and usage information
+db-backupper help
 
-### Backup with a Filename Prefix:
-Use the --prefix option to add a prefix to the generated backup filename. The prefix will be sanitized (spaces become underscores, special characters removed).
-```bash
-./db_backup.sh backup --prefix myproject
-```
-Example filename on S3: backup_myproject_mydb_20230101_120000.tar.gz
-
-### Restore from Backup
-
-This will download a specified archive from S3, decompress it, and restore it to the database.
-
-```bash
-./db_backup.sh restore s3://your-s3-bucket-name/path/to/your/backup_dbname_timestamp.tar.gz
+# Test configuration (dry run)
+db-backupper backup --help
 ```
 
-Replace s3://your-s3-bucket-name/path/to/your/backup_dbname_timestamp.tar.gz with the actual S3 URL of the backup archive you want to restore.
+## Contributing
 
-**Warning**: The restore operation will typically overwrite tables in the target database that are defined in the dump file. The pg_dump command used by this script generates a plain SQL dump which usually includes DROP TABLE IF EXISTS statements.
+This tool uses a modular architecture to make contributions easier:
 
-### Get Help
+1. **Configuration changes**: Edit `lib/config.sh`
+2. **Database operations**: Modify `lib/database.sh`
+3. **Backup logic**: Update `lib/backup.sh`
+4. **Restore functionality**: Change `lib/restore.sh`
+5. **Utilities/logging**: Enhance `lib/utils.sh`
 
-```bash
-./db_backup.sh help
-```
+## License
 
-### Important Notes
+[Add your license information here]
 
-**Security**:
+## Changelog
 
-The POSTGRES_URI in db_backup.conf contains database credentials. Ensure this file has appropriate permissions (e.g., chmod 600 db_backup.conf).
+### v2.0.0
+- **Major refactor**: Modular architecture with separate lib files
+- **Global installation**: Install as `db-backupper` command
+- **Enhanced cron support**: Robust PATH handling for automated execution  
+- **Flexible configuration**: Multiple config file locations
+- **Comprehensive documentation**: Detailed AWS setup and troubleshooting guides
+- **Backward compatibility**: All existing functionality preserved
 
-The script passes PGPASSWORD as an environment variable to docker exec. While convenient, this can be visible in process lists on the host. For higher security, consider configuring .pgpass within the Docker container image or using Docker secrets if your setup supports it.
-
-**AWS IAM profile/role**:
-
-Ensure your AWS IAM profile/role has minimal necessary S3 permissions (e.g., s3:PutObject for backup, s3:GetObject for restore, limited to the specific bucket/path).
-
-**Docker Container**:
-Docker Container: The DOCKER_CONTAINER_NAME must be correct and the container must be running. The container also needs to have pg_dump and psql client tools installed (standard PostgreSQL images do).
-
-**Error Handling**:
-
-The script uses set -eo pipefail for basic error handling. If a command fails, the script should exit. For restore operations, a partial restore might occur if psql fails mid-way (though --single-transaction and ON_ERROR_STOP=1 help mitigate this for many cases). Always verify critical restores.
-
-**Dump Format**:
-
-This script uses pg_dump -F p (plain SQL format). For very large databases or if you need features like parallel restore, you might consider pg_dump -Fc (custom format) and pg_restore. This would require modifying the script.
+### v1.x
+- Original monolithic `db_backup.sh` implementation
+- Basic backup and restore functionality
+- S3 integration and Docker support
