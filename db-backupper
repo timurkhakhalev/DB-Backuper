@@ -8,19 +8,36 @@ set -eo pipefail # Exit on error, treat unset variables as an error, and propaga
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source utility functions first (includes path setup)
+echo "DEBUG: About to source utils.sh"
 source "${SCRIPT_DIR}/lib/utils.sh"
+echo "DEBUG: Successfully sourced utils.sh"
 
 # Set up robust PATH for cron environments
+echo "DEBUG: About to call setup_path"
 setup_path
+echo "DEBUG: Successfully called setup_path"
 
 # Determine the configuration directory
+echo "DEBUG: About to call get_script_dir"
 CONFIG_DIR="$(get_script_dir)"
+echo "DEBUG: CONFIG_DIR set to: $CONFIG_DIR"
 
 # Source all modules
+echo "DEBUG: About to source config.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
+echo "DEBUG: Successfully sourced config.sh"
+
+echo "DEBUG: About to source database.sh"
 source "${SCRIPT_DIR}/lib/database.sh"
+echo "DEBUG: Successfully sourced database.sh"
+
+echo "DEBUG: About to source backup.sh"
 source "${SCRIPT_DIR}/lib/backup.sh"
+echo "DEBUG: Successfully sourced backup.sh"
+
+echo "DEBUG: About to source restore.sh"
 source "${SCRIPT_DIR}/lib/restore.sh"
+echo "DEBUG: Successfully sourced restore.sh"
 
 # Load configuration
 load_config
