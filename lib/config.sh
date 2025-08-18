@@ -9,7 +9,7 @@ load_config_secure() {
     log_info "Loading configuration from: $config_file"
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        ((line_num++))
+        line_num=$((line_num + 1))
         
         # Skip comments and empty lines
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
