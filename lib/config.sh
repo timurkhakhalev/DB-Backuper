@@ -6,6 +6,8 @@ load_config_secure() {
     local config_file="$1"
     local line_num=0
     
+    log_info "Loading configuration from: $config_file"
+    
     while IFS= read -r line || [[ -n "$line" ]]; do
         ((line_num++))
         
@@ -29,9 +31,11 @@ load_config_secure() {
                     
                     # Set variable safely
                     declare -g "$key=$value"
+                    log_info "Loaded config: $key=[REDACTED]"
                     ;;
                 *)
                     log_error "Unknown configuration variable '$key' at line $line_num"
+                    log_error "Valid variables are: AWS_PROFILE, S3_BUCKET_NAME, S3_BACKUP_PATH, POSTGRES_URI, DOCKER_CONTAINER_NAME"
                     exit 1
                     ;;
             esac
@@ -40,6 +44,8 @@ load_config_secure() {
             exit 1
         fi
     done < "$config_file"
+    
+    log_info "Configuration file parsing completed"
 }
 
 # Load configuration from backup.conf
@@ -82,14 +88,22 @@ validate_config() {
     local required_vars=(AWS_PROFILE S3_BUCKET_NAME POSTGRES_URI DOCKER_CONTAINER_NAME)
     local missing_vars=0
     
+    log_info "Starting configuration validation..."
+    
     for var_name in "${required_vars[@]}"; do
-        if [[ -z "${!var_name}" ]]; then
+        local var_value="${!var_name}"
+        if [[ -z "$var_value" ]]; then
             log_error "Required configuration variable '$var_name' is not set in backup.conf."
             missing_vars=1
+        else
+            log_info "✓ $var_name is set"
         fi
     done
     
     if [[ "$missing_vars" -eq 1 ]]; then
+        log_error "Configuration validation failed. Please check your backup.conf file."
         exit 1
     fi
+    
+    log_info "Configuration validation passed successfully."
 }
